@@ -1,5 +1,6 @@
 /**
- * Zip Game - Main Game Logic
+ * Zip Game - Main Logic
+ * Path connects numbered waypoints in order through a grid
  */
 
 class ZipGame {
@@ -9,35 +10,33 @@ class ZipGame {
     
     // Game state
     this.puzzle = null;
-    this.nodes = [];
-    this.connections = []; // Array of [nodeIndex1, nodeIndex2]
-    this.history = []; // For undo
+    this.path = []; // Array of {row, col}
+    this.history = [];
     this.startTime = null;
     this.isComplete = false;
     
-    // Visual settings
-    this.cellSize = 60;
-    this.nodeRadius = 12;
-    this.lineWidth = 4;
-    this.padding = 40;
+    // Grid data
+    this.grid = []; // 2D array: 'blocked', 'empty', or waypoint number
+    this.waypointPositions = new Map(); // number -> {row, col}
     
-    // Colors
+    // Visual settings
+    this.cellSize = 50;
+    this.padding = 8;
+    this.pathWidth = 0.7; // Relative to cell size
+    
+    // Colors (matching screenshot)
     this.colors = {
-      background: '#fafafa',
-      node: '#888',
-      nodeHover: '#666',
-      nodeFilled: '#4a90d9',
-      arrow: '#666',
-      line: '#aaa',
-      lineComplete: '#4a90d9',
-      error: '#e74c3c'
+      background: '#f5f0e8',
+      cellPlayable: '#f8d7d0', // Light pink
+      cellBlocked: '#faf6f0', // Off-white/cream
+      path: '#e85d3b', // Orange-red
+      waypoint: '#1a1a1a', // Black circles
+      waypointText: '#ffffff',
+      gridLine: 'rgba(0,0,0,0.06)'
     };
     
-    // Interaction state
+    // Interaction
     this.isDragging = false;
-    this.dragStartNode = null;
-    this.currentPos = null;
-    this.hoveredNode = null;
     
     // Bind methods
     this.handlePointerDown = this.handlePointerDown.bind(this);
@@ -45,10 +44,8 @@ class ZipGame {
     this.handlePointerUp = this.handlePointerUp.bind(this);
     this.handleResize = this.handleResize.bind(this);
     
-    // Setup
     this.setupEventListeners();
     this.setupControls();
-    this.updateDateDisplay();
   }
   
   setupEventListeners() {
@@ -61,74 +58,87 @@ class ZipGame {
   
   setupControls() {
     document.getElementById('undoBtn').addEventListener('click', () => this.undo());
-    document.getElementById('resetBtn').addEventListener('click', () => this.reset());
+    document.getElementById('hintBtn').addEventListener('click', () => this.showHint());
     document.getElementById('playAgainBtn').addEventListener('click', () => {
       this.hideCompletion();
       this.reset();
     });
   }
   
-  updateDateDisplay() {
-    const date = new Date();
-    const options = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
-    document.getElementById('dateDisplay').textContent = date.toLocaleDateString('en-US', options);
-  }
-  
   loadPuzzle(puzzle) {
     this.puzzle = puzzle;
-    this.nodes = puzzle.nodes.map((n, i) => ({
-      ...n,
-      index: i,
-      x: 0,
-      y: 0,
-      connections: []
-    }));
-    this.connections = [];
+    this.path = [];
     this.history = [];
     this.isComplete = false;
     this.startTime = Date.now();
+    
+    // Build grid
+    const size = puzzle.gridSize;
+    this.grid = [];
+    this.waypointPositions.clear();
+    
+    for (let r = 0; r < size; r++) {
+      this.grid[r] = [];
+      for (let c = 0; c < size; c++) {
+        this.grid[r][c] = 'empty';
+      }
+    }
+    
+    // Mark blocked cells
+    for (const b of puzzle.blocked) {
+      this.grid[b.row][b.col] = 'blocked';
+    }
+    
+    // Mark waypoints
+    for (const w of puzzle.waypoints) {
+      this.grid[w.row][w.col] = w.number;
+      this.waypointPositions.set(w.number, { row: w.row, col: w.col });
+    }
+    
+    // Start path at waypoint 1
+    const start = this.waypointPositions.get(1);
+    if (start) {
+      this.path = [{ row: start.row, col: start.col }];
+    }
     
     this.handleResize();
   }
   
   handleResize() {
-    const container = this.canvas.parentElement;
-    const maxSize = Math.min(container.clientWidth - 40, 500);
+    if (!this.puzzle) return;
     
-    this.cellSize = Math.floor((maxSize - this.padding * 2) / this.puzzle.gridSize);
-    const canvasSize = this.cellSize * this.puzzle.gridSize + this.padding * 2;
+    const container = this.canvas.parentElement;
+    const maxSize = Math.min(container.clientWidth - 24, 450);
+    
+    this.cellSize = Math.floor(maxSize / this.puzzle.gridSize);
+    const canvasSize = this.cellSize * this.puzzle.gridSize;
     
     this.canvas.width = canvasSize;
     this.canvas.height = canvasSize;
     this.canvas.style.width = canvasSize + 'px';
     this.canvas.style.height = canvasSize + 'px';
     
-    // Update node positions
-    this.nodes.forEach(node => {
-      node.x = this.padding + node.col * this.cellSize + this.cellSize / 2;
-      node.y = this.padding + node.row * this.cellSize + this.cellSize / 2;
-    });
-    
     this.render();
   }
   
-  getNodeAtPosition(x, y) {
-    const hitRadius = this.cellSize / 2;
-    for (const node of this.nodes) {
-      const dx = x - node.x;
-      const dy = y - node.y;
-      if (dx * dx + dy * dy < hitRadius * hitRadius) {
-        return node;
-      }
+  getCellFromPos(x, y) {
+    const col = Math.floor(x / this.cellSize);
+    const row = Math.floor(y / this.cellSize);
+    
+    if (row < 0 || row >= this.puzzle.gridSize || col < 0 || col >= this.puzzle.gridSize) {
+      return null;
     }
-    return null;
+    
+    return { row, col };
   }
   
   getPointerPos(e) {
     const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
     };
   }
   
@@ -136,333 +146,324 @@ class ZipGame {
     if (this.isComplete) return;
     
     const pos = this.getPointerPos(e);
-    const node = this.getNodeAtPosition(pos.x, pos.y);
+    const cell = this.getCellFromPos(pos.x, pos.y);
     
-    if (node) {
-      // Check if clicking on an existing connection to remove it
-      const connectionIndex = this.findConnectionAtNode(node);
-      if (connectionIndex !== -1 && node.connections.length > 0) {
-        // Start dragging from this node
-        this.isDragging = true;
-        this.dragStartNode = node;
-        this.currentPos = pos;
-        this.canvas.setPointerCapture(e.pointerId);
-      } else {
-        this.isDragging = true;
-        this.dragStartNode = node;
-        this.currentPos = pos;
-        this.canvas.setPointerCapture(e.pointerId);
-      }
+    if (cell) {
+      this.isDragging = true;
+      this.canvas.setPointerCapture(e.pointerId);
+      this.tryExtendPath(cell);
     }
-    
-    this.render();
   }
   
   handlePointerMove(e) {
-    const pos = this.getPointerPos(e);
+    if (!this.isDragging || this.isComplete) return;
     
-    if (this.isDragging) {
-      this.currentPos = pos;
-      this.hoveredNode = this.getNodeAtPosition(pos.x, pos.y);
-      this.render();
-    } else {
-      const node = this.getNodeAtPosition(pos.x, pos.y);
-      if (node !== this.hoveredNode) {
-        this.hoveredNode = node;
-        this.render();
-      }
+    const pos = this.getPointerPos(e);
+    const cell = this.getCellFromPos(pos.x, pos.y);
+    
+    if (cell) {
+      this.tryExtendPath(cell);
     }
   }
   
   handlePointerUp(e) {
-    if (this.isDragging && this.dragStartNode) {
-      const pos = this.getPointerPos(e);
-      const endNode = this.getNodeAtPosition(pos.x, pos.y);
-      
-      if (endNode && endNode !== this.dragStartNode) {
-        this.tryConnect(this.dragStartNode, endNode);
+    this.isDragging = false;
+  }
+  
+  tryExtendPath(cell) {
+    if (this.path.length === 0) return;
+    
+    const last = this.path[this.path.length - 1];
+    
+    // Same cell - ignore
+    if (cell.row === last.row && cell.col === last.col) return;
+    
+    // Check if going backwards (undo last move)
+    if (this.path.length >= 2) {
+      const prev = this.path[this.path.length - 2];
+      if (cell.row === prev.row && cell.col === prev.col) {
+        this.saveHistory();
+        this.path.pop();
+        this.render();
+        return;
       }
     }
     
-    this.isDragging = false;
-    this.dragStartNode = null;
-    this.currentPos = null;
+    // Must be adjacent (not diagonal)
+    const rowDiff = Math.abs(cell.row - last.row);
+    const colDiff = Math.abs(cell.col - last.col);
+    if (!((rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1))) {
+      return;
+    }
+    
+    // Can't go to blocked cell
+    if (this.grid[cell.row][cell.col] === 'blocked') {
+      return;
+    }
+    
+    // Can't revisit a cell already in path
+    if (this.path.some(p => p.row === cell.row && p.col === cell.col)) {
+      return;
+    }
+    
+    // Check waypoint order constraint
+    const cellValue = this.grid[cell.row][cell.col];
+    if (typeof cellValue === 'number') {
+      // This is a waypoint - check if it's the next one we need
+      const nextWaypoint = this.getNextRequiredWaypoint();
+      if (cellValue !== nextWaypoint) {
+        // Can only visit waypoints in order
+        return;
+      }
+    }
+    
+    // Valid move - extend path
+    this.saveHistory();
+    this.path.push({ row: cell.row, col: cell.col });
     this.render();
-  }
-  
-  tryConnect(node1, node2) {
-    // Check if already connected
-    const existingConnection = this.connections.findIndex(
-      c => (c[0] === node1.index && c[1] === node2.index) ||
-           (c[0] === node2.index && c[1] === node1.index)
-    );
     
-    if (existingConnection !== -1) {
-      // Remove connection
-      this.removeConnection(existingConnection);
-      return;
-    }
-    
-    // Check if connection is valid
-    if (!this.isValidConnection(node1, node2)) {
-      this.shakeNode(node2);
-      return;
-    }
-    
-    // Add connection
-    this.addConnection(node1.index, node2.index);
-    
-    // Check for completion
+    // Check completion
     if (this.checkCompletion()) {
       this.onComplete();
     }
   }
   
-  isValidConnection(node1, node2) {
-    // Must be adjacent (not diagonal)
-    const rowDiff = Math.abs(node1.row - node2.row);
-    const colDiff = Math.abs(node1.col - node2.col);
+  getNextRequiredWaypoint() {
+    // Find highest waypoint number in current path
+    let highest = 1; // We always start at 1
+    for (const p of this.path) {
+      const val = this.grid[p.row][p.col];
+      if (typeof val === 'number' && val > highest) {
+        highest = val;
+      }
+    }
+    return highest + 1;
+  }
+  
+  getVisitedWaypoints() {
+    const visited = new Set();
+    for (const p of this.path) {
+      const val = this.grid[p.row][p.col];
+      if (typeof val === 'number') {
+        visited.add(val);
+      }
+    }
+    return visited;
+  }
+  
+  saveHistory() {
+    this.history.push([...this.path.map(p => ({ ...p }))]);
+    // Limit history size
+    if (this.history.length > 100) {
+      this.history.shift();
+    }
+  }
+  
+  undo() {
+    if (this.history.length === 0) return;
+    this.path = this.history.pop();
+    this.render();
+  }
+  
+  reset() {
+    const start = this.waypointPositions.get(1);
+    if (start) {
+      this.path = [{ row: start.row, col: start.col }];
+    } else {
+      this.path = [];
+    }
+    this.history = [];
+    this.isComplete = false;
+    this.startTime = Date.now();
+    this.render();
+  }
+  
+  showHint() {
+    // Simple hint: highlight next waypoint
+    const next = this.getNextRequiredWaypoint();
+    const pos = this.waypointPositions.get(next);
+    if (pos) {
+      // Flash the waypoint
+      this.flashCell(pos.row, pos.col);
+    }
+  }
+  
+  flashCell(row, col) {
+    let flashes = 0;
+    const flash = () => {
+      flashes++;
+      this.render();
+      // Draw highlight
+      const ctx = this.ctx;
+      const x = col * this.cellSize;
+      const y = row * this.cellSize;
+      ctx.fillStyle = flashes % 2 === 1 ? 'rgba(232, 93, 59, 0.3)' : 'transparent';
+      ctx.fillRect(x, y, this.cellSize, this.cellSize);
+      
+      if (flashes < 6) {
+        setTimeout(flash, 150);
+      }
+    };
+    flash();
+  }
+  
+  checkCompletion() {
+    // Must have visited all waypoints in order
+    const totalWaypoints = this.puzzle.waypoints.length;
+    const visited = this.getVisitedWaypoints();
     
-    if (!((rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1))) {
-      return false;
+    if (visited.size !== totalWaypoints) return false;
+    
+    // Check all numbers 1 to totalWaypoints are visited
+    for (let i = 1; i <= totalWaypoints; i++) {
+      if (!visited.has(i)) return false;
     }
     
-    // Check node connection limits (max 2)
-    if (node1.connections.length >= 2 || node2.connections.length >= 2) {
-      return false;
-    }
-    
-    // Check directional constraints
-    const direction1to2 = this.getDirection(node1, node2);
-    const direction2to1 = this.getDirection(node2, node1);
-    
-    if (!this.canConnectInDirection(node1, direction1to2)) {
-      return false;
-    }
-    if (!this.canConnectInDirection(node2, direction2to1)) {
+    // Path must end at last waypoint
+    const lastPos = this.path[this.path.length - 1];
+    const lastWaypointPos = this.waypointPositions.get(totalWaypoints);
+    if (lastPos.row !== lastWaypointPos.row || lastPos.col !== lastWaypointPos.col) {
       return false;
     }
     
     return true;
   }
   
-  getDirection(from, to) {
-    if (to.row < from.row) return 'up';
-    if (to.row > from.row) return 'down';
-    if (to.col < from.col) return 'left';
-    if (to.col > from.col) return 'right';
-    return null;
-  }
-  
-  canConnectInDirection(node, direction) {
-    // Neutral nodes (empty directions array) can connect in any direction
-    if (node.directions.length === 0) return true;
-    return node.directions.includes(direction);
-  }
-  
-  addConnection(index1, index2) {
-    this.history.push([...this.connections.map(c => [...c])]);
-    this.connections.push([index1, index2]);
-    this.nodes[index1].connections.push(index2);
-    this.nodes[index2].connections.push(index1);
-  }
-  
-  removeConnection(connectionIndex) {
-    this.history.push([...this.connections.map(c => [...c])]);
-    const [index1, index2] = this.connections[connectionIndex];
-    this.connections.splice(connectionIndex, 1);
-    this.nodes[index1].connections = this.nodes[index1].connections.filter(i => i !== index2);
-    this.nodes[index2].connections = this.nodes[index2].connections.filter(i => i !== index1);
-  }
-  
-  findConnectionAtNode(node) {
-    return this.connections.findIndex(
-      c => c[0] === node.index || c[1] === node.index
-    );
-  }
-  
-  undo() {
-    if (this.history.length === 0) return;
-    
-    const previousState = this.history.pop();
-    this.connections = previousState;
-    
-    // Rebuild node connections
-    this.nodes.forEach(node => node.connections = []);
-    this.connections.forEach(([i1, i2]) => {
-      this.nodes[i1].connections.push(i2);
-      this.nodes[i2].connections.push(i1);
-    });
-    
-    this.render();
-  }
-  
-  reset() {
-    this.connections = [];
-    this.history = [];
-    this.nodes.forEach(node => node.connections = []);
-    this.isComplete = false;
-    this.startTime = Date.now();
-    this.render();
-  }
-  
-  checkCompletion() {
-    // All nodes must have exactly 2 connections, except 2 endpoints with 1
-    const endpoints = this.nodes.filter(n => n.connections.length === 1);
-    const midpoints = this.nodes.filter(n => n.connections.length === 2);
-    const unconnected = this.nodes.filter(n => n.connections.length === 0);
-    
-    if (unconnected.length > 0) return false;
-    if (endpoints.length !== 2) return false;
-    if (midpoints.length !== this.nodes.length - 2) return false;
-    
-    // Check path is continuous (all nodes connected in one path)
-    const visited = new Set();
-    const queue = [endpoints[0].index];
-    
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (visited.has(current)) continue;
-      visited.add(current);
-      
-      for (const neighbor of this.nodes[current].connections) {
-        if (!visited.has(neighbor)) {
-          queue.push(neighbor);
-        }
-      }
-    }
-    
-    return visited.size === this.nodes.length;
-  }
-  
   onComplete() {
     this.isComplete = true;
+    
     const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
     const minutes = Math.floor(elapsed / 60);
     const seconds = elapsed % 60;
     const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
     
-    document.getElementById('completionStats').textContent = `Time: ${timeStr} • Moves: ${this.connections.length}`;
+    document.getElementById('completionStats').textContent = `Time: ${timeStr}`;
     
+    // Animate then show overlay
+    this.render();
     setTimeout(() => {
       document.getElementById('completionOverlay').classList.add('visible');
-    }, 500);
-    
-    this.render();
+    }, 600);
   }
   
   hideCompletion() {
     document.getElementById('completionOverlay').classList.remove('visible');
   }
   
-  shakeNode(node) {
-    // Visual feedback for invalid move
-    const originalX = node.x;
-    let shakeCount = 0;
-    const shake = () => {
-      shakeCount++;
-      node.x = originalX + (shakeCount % 2 === 0 ? 3 : -3);
-      this.render();
-      if (shakeCount < 6) {
-        requestAnimationFrame(shake);
-      } else {
-        node.x = originalX;
-        this.render();
-      }
-    };
-    shake();
-  }
-  
   render() {
     const ctx = this.ctx;
+    const size = this.puzzle.gridSize;
     
-    // Clear
+    // Clear with background
     ctx.fillStyle = this.colors.background;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
-    // Draw connections
-    ctx.strokeStyle = this.isComplete ? this.colors.lineComplete : this.colors.line;
-    ctx.lineWidth = this.lineWidth;
-    ctx.lineCap = 'round';
-    
-    for (const [i1, i2] of this.connections) {
-      const n1 = this.nodes[i1];
-      const n2 = this.nodes[i2];
-      ctx.beginPath();
-      ctx.moveTo(n1.x, n1.y);
-      ctx.lineTo(n2.x, n2.y);
-      ctx.stroke();
+    // Draw cells
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const x = c * this.cellSize;
+        const y = r * this.cellSize;
+        const val = this.grid[r][c];
+        
+        // Cell background
+        if (val === 'blocked') {
+          ctx.fillStyle = this.colors.cellBlocked;
+        } else {
+          ctx.fillStyle = this.colors.cellPlayable;
+        }
+        
+        // Draw with slight gap for grid effect
+        const gap = 1;
+        ctx.fillRect(x + gap, y + gap, this.cellSize - gap * 2, this.cellSize - gap * 2);
+      }
     }
     
-    // Draw drag line
-    if (this.isDragging && this.dragStartNode && this.currentPos) {
-      ctx.strokeStyle = 'rgba(150, 150, 150, 0.5)';
-      ctx.beginPath();
-      ctx.moveTo(this.dragStartNode.x, this.dragStartNode.y);
-      ctx.lineTo(this.currentPos.x, this.currentPos.y);
-      ctx.stroke();
+    // Draw path
+    if (this.path.length > 0) {
+      this.drawPath();
     }
     
-    // Draw nodes
-    for (const node of this.nodes) {
-      const isFilled = node.connections.length > 0;
-      const isHovered = node === this.hoveredNode;
-      const isEndpoint = node.connections.length === 1;
-      
-      // Node circle
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, this.nodeRadius, 0, Math.PI * 2);
-      
-      if (isFilled) {
-        ctx.fillStyle = this.isComplete ? this.colors.lineComplete : this.colors.nodeFilled;
-        ctx.fill();
-      } else {
-        ctx.fillStyle = this.colors.background;
-        ctx.fill();
-        ctx.strokeStyle = isHovered ? this.colors.nodeHover : this.colors.node;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-      
-      // Draw direction arrows if not filled
-      if (!isFilled && node.directions.length > 0) {
-        this.drawDirectionArrows(node);
-      }
+    // Draw waypoints on top
+    for (const w of this.puzzle.waypoints) {
+      this.drawWaypoint(w.row, w.col, w.number);
     }
   }
   
-  drawDirectionArrows(node) {
+  drawPath() {
     const ctx = this.ctx;
-    const arrowSize = 6;
-    const offset = this.nodeRadius - 4;
+    const pathWidth = this.cellSize * this.pathWidth;
     
-    ctx.fillStyle = this.colors.arrow;
-    ctx.strokeStyle = this.colors.arrow;
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = this.colors.path;
+    ctx.fillStyle = this.colors.path;
+    ctx.lineWidth = pathWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     
-    for (const dir of node.directions) {
-      ctx.save();
-      ctx.translate(node.x, node.y);
-      
-      let angle = 0;
-      switch (dir) {
-        case 'up': angle = -Math.PI / 2; break;
-        case 'down': angle = Math.PI / 2; break;
-        case 'left': angle = Math.PI; break;
-        case 'right': angle = 0; break;
-      }
-      
-      ctx.rotate(angle);
-      
-      // Draw small arrow pointing outward
+    if (this.path.length === 1) {
+      // Single cell - draw filled rounded rect
+      const p = this.path[0];
+      const x = p.col * this.cellSize + this.cellSize / 2;
+      const y = p.row * this.cellSize + this.cellSize / 2;
       ctx.beginPath();
-      ctx.moveTo(offset - arrowSize, -arrowSize / 2);
-      ctx.lineTo(offset, 0);
-      ctx.lineTo(offset - arrowSize, arrowSize / 2);
-      ctx.stroke();
-      
-      ctx.restore();
+      ctx.arc(x, y, pathWidth / 2, 0, Math.PI * 2);
+      ctx.fill();
+      return;
     }
+    
+    // Draw path as thick line through cell centers
+    ctx.beginPath();
+    for (let i = 0; i < this.path.length; i++) {
+      const p = this.path[i];
+      const x = p.col * this.cellSize + this.cellSize / 2;
+      const y = p.row * this.cellSize + this.cellSize / 2;
+      
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    
+    // Draw rounded caps at start and end
+    const first = this.path[0];
+    const last = this.path[this.path.length - 1];
+    
+    ctx.beginPath();
+    ctx.arc(
+      first.col * this.cellSize + this.cellSize / 2,
+      first.row * this.cellSize + this.cellSize / 2,
+      pathWidth / 2, 0, Math.PI * 2
+    );
+    ctx.fill();
+    
+    ctx.beginPath();
+    ctx.arc(
+      last.col * this.cellSize + this.cellSize / 2,
+      last.row * this.cellSize + this.cellSize / 2,
+      pathWidth / 2, 0, Math.PI * 2
+    );
+    ctx.fill();
+  }
+  
+  drawWaypoint(row, col, number) {
+    const ctx = this.ctx;
+    const x = col * this.cellSize + this.cellSize / 2;
+    const y = row * this.cellSize + this.cellSize / 2;
+    const radius = this.cellSize * 0.32;
+    
+    // Black circle
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = this.colors.waypoint;
+    ctx.fill();
+    
+    // Number
+    ctx.fillStyle = this.colors.waypointText;
+    ctx.font = `bold ${Math.floor(this.cellSize * 0.35)}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(number.toString(), x, y + 1);
   }
 }
 
