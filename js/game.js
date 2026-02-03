@@ -410,5 +410,21 @@ class ZipGame {
 
 // Initialize
 const game = new ZipGame('gameCanvas');
-const puzzle = getPuzzleForDate();
-game.loadPuzzle(puzzle);
+let currentPuzzleIndex = 0;
+
+function loadPuzzleNum(index) {
+  currentPuzzleIndex = index;
+  const puzzle = getPuzzleByIndex(index);
+  game.loadPuzzle(puzzle);
+  document.getElementById('puzzleNum').textContent = `Puzzle ${index + 1}`;
+}
+
+document.getElementById('prevBtn').addEventListener('click', () => {
+  loadPuzzleNum(Math.max(0, currentPuzzleIndex - 1));
+});
+
+document.getElementById('nextBtn').addEventListener('click', () => {
+  loadPuzzleNum(currentPuzzleIndex + 1);
+});
+
+loadPuzzleNum(0);
