@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#fafafa">
+  <title>Zip</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.svg">
+  <link rel="icon" type="image/svg+xml" href="icon-192.svg">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #fafafa;
+      color: #333;
+    }
+    
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100%;
+      padding: 20px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    
+    .header h1 {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      color: #222;
+      margin-bottom: 4px;
+    }
+    
+    .header .date {
+      font-size: 13px;
+      color: #888;
+      font-weight: 400;
+    }
+    
+    #gameCanvas {
+      touch-action: none;
+      cursor: pointer;
+    }
+    
+    .controls {
+      margin-top: 24px;
+      display: flex;
+      gap: 16px;
+    }
+    
+    .btn {
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      border: 1.5px solid #ccc;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      color: #555;
+    }
+    
+    .btn:hover {
+      border-color: #999;
+      color: #333;
+    }
+    
+    .btn:active {
+      transform: scale(0.97);
+    }
+    
+    .completion-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(250, 250, 250, 0.95);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+    
+    .completion-overlay.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    
+    .completion-overlay h2 {
+      font-size: 32px;
+      font-weight: 600;
+      color: #4a90d9;
+      margin-bottom: 16px;
+    }
+    
+    .completion-overlay .stats {
+      font-size: 16px;
+      color: #666;
+      margin-bottom: 24px;
+    }
+    
+    .completion-overlay .btn {
+      border-color: #4a90d9;
+      color: #4a90d9;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>ZIP</h1>
+      <div class="date" id="dateDisplay"></div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="controls">
+      <button class="btn" id="undoBtn">Undo</button>
+      <button class="btn" id="resetBtn">Reset</button>
+    </div>
+  </div>
+  
+  <div class="completion-overlay" id="completionOverlay">
+    <h2>Solved!</h2>
+    <div class="stats" id="completionStats"></div>
+    <button class="btn" id="playAgainBtn">Play Again</button>
+  </div>
+  
+  <script src="js/puzzles.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
