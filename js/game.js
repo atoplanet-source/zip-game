@@ -1,6 +1,10 @@
 /**
  * Zip Game - Main Logic
- * Path connects numbered waypoints in order through a grid
+ * 
+ * Rules:
+ * 1. Fill ALL cells with one continuous path
+ * 2. Visit numbered waypoints in order (1→2→3→...)
+ * 3. Path cannot cross itself
  */
 
 class ZipGame {
@@ -16,44 +20,38 @@ class ZipGame {
     this.isComplete = false;
     
     // Grid data
-    this.grid = []; // 2D array: 'blocked', 'empty', or waypoint number
+    this.gridSize = 0;
     this.waypointPositions = new Map(); // number -> {row, col}
+    this.waypointAt = new Map(); // "row,col" -> number
+    this.totalCells = 0;
     
     // Visual settings
     this.cellSize = 50;
-    this.padding = 8;
-    this.pathWidth = 0.7; // Relative to cell size
+    this.pathWidth = 0.7;
     
-    // Colors (matching screenshot)
+    // Colors
     this.colors = {
       background: '#f5f0e8',
-      cellPlayable: '#f8d7d0', // Light pink
-      cellBlocked: '#faf6f0', // Off-white/cream
-      path: '#e85d3b', // Orange-red
-      waypoint: '#1a1a1a', // Black circles
+      cellEmpty: '#f8d7d0', // Light pink - unfilled
+      cellFilled: '#e85d3b', // Orange - filled by path
+      waypoint: '#1a1a1a',
       waypointText: '#ffffff',
-      gridLine: 'rgba(0,0,0,0.06)'
+      border: '#f5f0e8'
     };
     
     // Interaction
     this.isDragging = false;
-    
-    // Bind methods
-    this.handlePointerDown = this.handlePointerDown.bind(this);
-    this.handlePointerMove = this.handlePointerMove.bind(this);
-    this.handlePointerUp = this.handlePointerUp.bind(this);
-    this.handleResize = this.handleResize.bind(this);
     
     this.setupEventListeners();
     this.setupControls();
   }
   
   setupEventListeners() {
-    this.canvas.addEventListener('pointerdown', this.handlePointerDown);
-    this.canvas.addEventListener('pointermove', this.handlePointerMove);
-    this.canvas.addEventListener('pointerup', this.handlePointerUp);
-    this.canvas.addEventListener('pointerleave', this.handlePointerUp);
-    window.addEventListener('resize', this.handleResize);
+    this.canvas.addEventListener('pointerdown', this.handlePointerDown.bind(this));
+    this.canvas.addEventListener('pointermove', this.handlePointerMove.bind(this));
+    this.canvas.addEventListener('pointerup', this.handlePointerUp.bind(this));
+    this.canvas.addEventListener('pointerleave', this.handlePointerUp.bind(this));
+    window.addEventListener('resize', this.handleResize.bind(this));
   }
   
   setupControls() {
@@ -67,35 +65,23 @@ class ZipGame {
   
   loadPuzzle(puzzle) {
     this.puzzle = puzzle;
+    this.gridSize = puzzle.gridSize;
+    this.totalCells = this.gridSize * this.gridSize;
     this.path = [];
     this.history = [];
     this.isComplete = false;
     this.startTime = Date.now();
     
-    // Build grid
-    const size = puzzle.gridSize;
-    this.grid = [];
+    // Build waypoint maps
     this.waypointPositions.clear();
+    this.waypointAt.clear();
     
-    for (let r = 0; r < size; r++) {
-      this.grid[r] = [];
-      for (let c = 0; c < size; c++) {
-        this.grid[r][c] = 'empty';
-      }
-    }
-    
-    // Mark blocked cells
-    for (const b of puzzle.blocked) {
-      this.grid[b.row][b.col] = 'blocked';
-    }
-    
-    // Mark waypoints
     for (const w of puzzle.waypoints) {
-      this.grid[w.row][w.col] = w.number;
       this.waypointPositions.set(w.number, { row: w.row, col: w.col });
+      this.waypointAt.set(`${w.row},${w.col}`, w.number);
     }
     
-    // Start path at waypoint 1
+    // Start at waypoint 1
     const start = this.waypointPositions.get(1);
     if (start) {
       this.path = [{ row: start.row, col: start.col }];
@@ -110,8 +96,8 @@ class ZipGame {
     const container = this.canvas.parentElement;
     const maxSize = Math.min(container.clientWidth - 24, 450);
     
-    this.cellSize = Math.floor(maxSize / this.puzzle.gridSize);
-    const canvasSize = this.cellSize * this.puzzle.gridSize;
+    this.cellSize = Math.floor(maxSize / this.gridSize);
+    const canvasSize = this.cellSize * this.gridSize;
     
     this.canvas.width = canvasSize;
     this.canvas.height = canvasSize;
@@ -125,10 +111,9 @@ class ZipGame {
     const col = Math.floor(x / this.cellSize);
     const row = Math.floor(y / this.cellSize);
     
-    if (row < 0 || row >= this.puzzle.gridSize || col < 0 || col >= this.puzzle.gridSize) {
+    if (row < 0 || row >= this.gridSize || col < 0 || col >= this.gridSize) {
       return null;
     }
-    
     return { row, col };
   }
   
@@ -166,7 +151,7 @@ class ZipGame {
     }
   }
   
-  handlePointerUp(e) {
+  handlePointerUp() {
     this.isDragging = false;
   }
   
@@ -178,7 +163,7 @@ class ZipGame {
     // Same cell - ignore
     if (cell.row === last.row && cell.col === last.col) return;
     
-    // Check if going backwards (undo last move)
+    // Check if going backwards (undo)
     if (this.path.length >= 2) {
       const prev = this.path[this.path.length - 2];
       if (cell.row === prev.row && cell.col === prev.col) {
@@ -196,67 +181,45 @@ class ZipGame {
       return;
     }
     
-    // Can't go to blocked cell
-    if (this.grid[cell.row][cell.col] === 'blocked') {
-      return;
-    }
-    
     // Can't revisit a cell already in path
     if (this.path.some(p => p.row === cell.row && p.col === cell.col)) {
       return;
     }
     
     // Check waypoint order constraint
-    const cellValue = this.grid[cell.row][cell.col];
-    if (typeof cellValue === 'number') {
-      // This is a waypoint - check if it's the next one we need
-      const nextWaypoint = this.getNextRequiredWaypoint();
-      if (cellValue !== nextWaypoint) {
+    const waypointNum = this.waypointAt.get(`${cell.row},${cell.col}`);
+    if (waypointNum !== undefined) {
+      const nextRequired = this.getNextRequiredWaypoint();
+      if (waypointNum !== nextRequired) {
         // Can only visit waypoints in order
         return;
       }
     }
     
-    // Valid move - extend path
+    // Valid move
     this.saveHistory();
     this.path.push({ row: cell.row, col: cell.col });
     this.render();
     
-    // Check completion
     if (this.checkCompletion()) {
       this.onComplete();
     }
   }
   
   getNextRequiredWaypoint() {
-    // Find highest waypoint number in current path
-    let highest = 1; // We always start at 1
+    let highest = 1;
     for (const p of this.path) {
-      const val = this.grid[p.row][p.col];
-      if (typeof val === 'number' && val > highest) {
-        highest = val;
+      const num = this.waypointAt.get(`${p.row},${p.col}`);
+      if (num !== undefined && num > highest) {
+        highest = num;
       }
     }
     return highest + 1;
   }
   
-  getVisitedWaypoints() {
-    const visited = new Set();
-    for (const p of this.path) {
-      const val = this.grid[p.row][p.col];
-      if (typeof val === 'number') {
-        visited.add(val);
-      }
-    }
-    return visited;
-  }
-  
   saveHistory() {
     this.history.push([...this.path.map(p => ({ ...p }))]);
-    // Limit history size
-    if (this.history.length > 100) {
-      this.history.shift();
-    }
+    if (this.history.length > 200) this.history.shift();
   }
   
   undo() {
@@ -267,11 +230,7 @@ class ZipGame {
   
   reset() {
     const start = this.waypointPositions.get(1);
-    if (start) {
-      this.path = [{ row: start.row, col: start.col }];
-    } else {
-      this.path = [];
-    }
+    this.path = start ? [{ row: start.row, col: start.col }] : [];
     this.history = [];
     this.isComplete = false;
     this.startTime = Date.now();
@@ -279,13 +238,9 @@ class ZipGame {
   }
   
   showHint() {
-    // Simple hint: highlight next waypoint
     const next = this.getNextRequiredWaypoint();
     const pos = this.waypointPositions.get(next);
-    if (pos) {
-      // Flash the waypoint
-      this.flashCell(pos.row, pos.col);
-    }
+    if (pos) this.flashCell(pos.row, pos.col);
   }
   
   flashCell(row, col) {
@@ -293,36 +248,36 @@ class ZipGame {
     const flash = () => {
       flashes++;
       this.render();
-      // Draw highlight
       const ctx = this.ctx;
       const x = col * this.cellSize;
       const y = row * this.cellSize;
-      ctx.fillStyle = flashes % 2 === 1 ? 'rgba(232, 93, 59, 0.3)' : 'transparent';
+      ctx.fillStyle = flashes % 2 === 1 ? 'rgba(255,255,255,0.5)' : 'transparent';
       ctx.fillRect(x, y, this.cellSize, this.cellSize);
-      
-      if (flashes < 6) {
-        setTimeout(flash, 150);
-      }
+      if (flashes < 6) setTimeout(flash, 150);
     };
     flash();
   }
   
   checkCompletion() {
-    // Must have visited all waypoints in order
+    // Must fill ALL cells
+    if (this.path.length !== this.totalCells) return false;
+    
+    // Must have visited all waypoints
     const totalWaypoints = this.puzzle.waypoints.length;
-    const visited = this.getVisitedWaypoints();
+    const visited = new Set();
+    for (const p of this.path) {
+      const num = this.waypointAt.get(`${p.row},${p.col}`);
+      if (num !== undefined) visited.add(num);
+    }
     
-    if (visited.size !== totalWaypoints) return false;
-    
-    // Check all numbers 1 to totalWaypoints are visited
     for (let i = 1; i <= totalWaypoints; i++) {
       if (!visited.has(i)) return false;
     }
     
-    // Path must end at last waypoint
+    // Must end at last waypoint
     const lastPos = this.path[this.path.length - 1];
-    const lastWaypointPos = this.waypointPositions.get(totalWaypoints);
-    if (lastPos.row !== lastWaypointPos.row || lastPos.col !== lastWaypointPos.col) {
+    const lastWP = this.waypointPositions.get(totalWaypoints);
+    if (lastPos.row !== lastWP.row || lastPos.col !== lastWP.col) {
       return false;
     }
     
@@ -339,7 +294,6 @@ class ZipGame {
     
     document.getElementById('completionStats').textContent = `Time: ${timeStr}`;
     
-    // Animate then show overlay
     this.render();
     setTimeout(() => {
       document.getElementById('completionOverlay').classList.add('visible');
@@ -352,98 +306,73 @@ class ZipGame {
   
   render() {
     const ctx = this.ctx;
-    const size = this.puzzle.gridSize;
     
-    // Clear with background
+    // Build set of filled cells
+    const filled = new Set();
+    for (const p of this.path) {
+      filled.add(`${p.row},${p.col}`);
+    }
+    
+    // Clear
     ctx.fillStyle = this.colors.background;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
     // Draw cells
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const x = c * this.cellSize;
-        const y = r * this.cellSize;
-        const val = this.grid[r][c];
+    const gap = 2;
+    const radius = 6;
+    
+    for (let r = 0; r < this.gridSize; r++) {
+      for (let c = 0; c < this.gridSize; c++) {
+        const x = c * this.cellSize + gap;
+        const y = r * this.cellSize + gap;
+        const w = this.cellSize - gap * 2;
+        const h = this.cellSize - gap * 2;
         
-        // Cell background
-        if (val === 'blocked') {
-          ctx.fillStyle = this.colors.cellBlocked;
-        } else {
-          ctx.fillStyle = this.colors.cellPlayable;
-        }
+        const isFilled = filled.has(`${r},${c}`);
+        ctx.fillStyle = isFilled ? this.colors.cellFilled : this.colors.cellEmpty;
         
-        // Draw with slight gap for grid effect
-        const gap = 1;
-        ctx.fillRect(x + gap, y + gap, this.cellSize - gap * 2, this.cellSize - gap * 2);
+        // Rounded rect
+        this.roundRect(ctx, x, y, w, h, radius);
+        ctx.fill();
       }
     }
     
-    // Draw path
-    if (this.path.length > 0) {
-      this.drawPath();
+    // Draw path connections (rounded corners between cells)
+    if (this.path.length > 1) {
+      this.drawPathConnections();
     }
     
-    // Draw waypoints on top
+    // Draw waypoints
     for (const w of this.puzzle.waypoints) {
       this.drawWaypoint(w.row, w.col, w.number);
     }
   }
   
-  drawPath() {
+  drawPathConnections() {
     const ctx = this.ctx;
-    const pathWidth = this.cellSize * this.pathWidth;
+    const gap = 2;
     
-    ctx.strokeStyle = this.colors.path;
-    ctx.fillStyle = this.colors.path;
-    ctx.lineWidth = pathWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.fillStyle = this.colors.cellFilled;
     
-    if (this.path.length === 1) {
-      // Single cell - draw filled rounded rect
-      const p = this.path[0];
-      const x = p.col * this.cellSize + this.cellSize / 2;
-      const y = p.row * this.cellSize + this.cellSize / 2;
-      ctx.beginPath();
-      ctx.arc(x, y, pathWidth / 2, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-    
-    // Draw path as thick line through cell centers
-    ctx.beginPath();
-    for (let i = 0; i < this.path.length; i++) {
-      const p = this.path[i];
-      const x = p.col * this.cellSize + this.cellSize / 2;
-      const y = p.row * this.cellSize + this.cellSize / 2;
+    for (let i = 0; i < this.path.length - 1; i++) {
+      const curr = this.path[i];
+      const next = this.path[i + 1];
       
-      if (i === 0) {
-        ctx.moveTo(x, y);
+      // Fill the gap between adjacent cells
+      if (curr.row === next.row) {
+        // Horizontal connection
+        const minCol = Math.min(curr.col, next.col);
+        const x = minCol * this.cellSize + this.cellSize - gap;
+        const y = curr.row * this.cellSize + gap;
+        ctx.fillRect(x, y, gap * 2, this.cellSize - gap * 2);
       } else {
-        ctx.lineTo(x, y);
+        // Vertical connection
+        const minRow = Math.min(curr.row, next.row);
+        const x = curr.col * this.cellSize + gap;
+        const y = minRow * this.cellSize + this.cellSize - gap;
+        ctx.fillRect(x, y, this.cellSize - gap * 2, gap * 2);
       }
     }
-    ctx.stroke();
-    
-    // Draw rounded caps at start and end
-    const first = this.path[0];
-    const last = this.path[this.path.length - 1];
-    
-    ctx.beginPath();
-    ctx.arc(
-      first.col * this.cellSize + this.cellSize / 2,
-      first.row * this.cellSize + this.cellSize / 2,
-      pathWidth / 2, 0, Math.PI * 2
-    );
-    ctx.fill();
-    
-    ctx.beginPath();
-    ctx.arc(
-      last.col * this.cellSize + this.cellSize / 2,
-      last.row * this.cellSize + this.cellSize / 2,
-      pathWidth / 2, 0, Math.PI * 2
-    );
-    ctx.fill();
   }
   
   drawWaypoint(row, col, number) {
@@ -452,22 +381,34 @@ class ZipGame {
     const y = row * this.cellSize + this.cellSize / 2;
     const radius = this.cellSize * 0.32;
     
-    // Black circle
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = this.colors.waypoint;
     ctx.fill();
     
-    // Number
     ctx.fillStyle = this.colors.waypointText;
-    ctx.font = `bold ${Math.floor(this.cellSize * 0.35)}px -apple-system, sans-serif`;
+    ctx.font = `bold ${Math.floor(this.cellSize * 0.38)}px -apple-system, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(number.toString(), x, y + 1);
   }
+  
+  roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
 }
 
-// Initialize game
+// Initialize
 const game = new ZipGame('gameCanvas');
 const puzzle = getPuzzleForDate();
 game.loadPuzzle(puzzle);
